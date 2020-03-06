@@ -1,0 +1,2 @@
+@echo off
+cl -Zi /EHsc /MT /D"WIN32" "main.cpp" /link -subsystem:windows,5.1 "dinput8.lib" "dxguid.lib" "Xinput.lib" "opengl32.lib" "glu32.lib" "kernel32.lib" "user32.lib" "gdi32.lib" /OUT:"FightcadeButtonConfig.exe"
