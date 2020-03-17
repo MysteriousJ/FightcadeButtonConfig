@@ -1,4 +1,4 @@
-/* jfb_joystick v0.3 - MIT License
+/* jfb_joystick v0.4 - MIT License
 *	
 *	In exacly one source file, add
 *		#define JFBJOY_IMPLEMENTATION
@@ -90,6 +90,13 @@ struct Button
 	bool down;    // True while the button is held down.
 };
 
+struct Axis
+{
+	// Values are in the range [-1,1]
+	float current;
+	float previous;
+};
+
 enum Hat
 {
 	Hat_up=1, Hat_right=2, Hat_down=4, Hat_left=8
@@ -100,8 +107,8 @@ struct Joystick
 	enum { maxButtons = 32, maxAxes = 6};
 
 	Button buttons[maxButtons];
-	float axes[maxAxes];         // [-1,1]
-	char hat;
+	Axis axes[maxAxes];
+	char hat;                    // Bitflags
 	char previousHat;
 	char* name;                  // UTF-8
 
@@ -109,6 +116,7 @@ struct Joystick
 	unsigned int _xinputIndex;
 #endif
 #ifdef JFBJOY_DINPUT
+	unsigned int _axisCount;
 	LPDIRECTINPUTDEVICE _dinputDevice;
 #endif
 #ifdef JFBJOY_SDL
@@ -259,6 +267,9 @@ BOOL CALLBACK DirectInputEnumDevicesCallback(LPCDIDEVICEINSTANCE instance, LPVOI
 
 		Joystick joystick = { 0 };
 		data->dinput->CreateDevice(instance->guidInstance, &joystick._dinputDevice, NULL);
+		DIDEVCAPS caps = { sizeof(DIDEVCAPS) };
+		joystick._dinputDevice->GetCapabilities(&caps);
+		joystick._axisCount = caps.dwAxes;
 		
 		// Copy display-name
 		DIDEVICEINSTANCE deviceInfo = { sizeof(DIDEVICEINSTANCE) };
@@ -338,6 +349,7 @@ Joystick* createJoysticks(unsigned int* out_joystickCount)
 
 #ifdef JFBJOY_SDL
 	SDL_InitSubSystem(SDL_INIT_JOYSTICK);
+	SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
 	joystickCount = SDL_NumJoysticks();
 	joysticks = (Joystick*) calloc(joystickCount, sizeof(Joystick));
 	for (unsigned int i = 0; i < joystickCount; ++i) {
@@ -398,12 +410,20 @@ void updateJoysticks(Joystick inout[], unsigned int joystickCount)
 				}
 
 				// Axes
-				joystick->axes[0] = (float)(state.lX  - SHRT_MAX) / (float)SHRT_MAX;
-				joystick->axes[1] = (float)(state.lY  - SHRT_MAX) / (float)SHRT_MAX;
-				joystick->axes[2] = (float)(state.lZ  - SHRT_MAX) / (float)SHRT_MAX;
-				joystick->axes[3] = (float)(state.lRx - SHRT_MAX) / (float)SHRT_MAX;
-				joystick->axes[4] = (float)(state.lRy - SHRT_MAX) / (float)SHRT_MAX;
-				joystick->axes[5] = (float)(state.lRz - SHRT_MAX) / (float)SHRT_MAX;
+				LONG axes[] = {
+					state.lX,
+					state.lY,
+					state.lZ,
+					state.lRx,
+					state.lRy,
+					state.lRz
+				};
+				unsigned int axisCount = sizeof(axes) / sizeof(axes[0]);
+				if (axisCount > Joystick::maxAxes) axisCount = Joystick::maxAxes;
+				for (unsigned int axisIndex = 0; axisIndex < axisCount; ++axisIndex) {
+					joystick->axes[axisIndex].previous = joystick->axes[axisIndex].current;
+					joystick->axes[axisIndex].current = (float)(axes[axisIndex]  - SHRT_MAX) / (float)SHRT_MAX;
+				}
 
 				// Hat
 				joystick->previousHat = joystick->hat;
@@ -446,12 +466,15 @@ void updateJoysticks(Joystick inout[], unsigned int joystickCount)
 				updateButton(&joystick->buttons[12], state.Gamepad.wButtons & XINPUT_GAMEPAD_X);
 				updateButton(&joystick->buttons[13], state.Gamepad.wButtons & XINPUT_GAMEPAD_Y);
 
-				joystick->axes[0] = state.Gamepad.sThumbLX   / (float)SHRT_MAX;
-				joystick->axes[1] = -state.Gamepad.sThumbLY  / (float)SHRT_MAX;
-				joystick->axes[2] = state.Gamepad.sThumbRX   / (float)SHRT_MAX;
-				joystick->axes[3] = -state.Gamepad.sThumbRX  / (float)SHRT_MAX;
-				joystick->axes[4] = state.Gamepad.bLeftTrigger / (float)UCHAR_MAX;
-				joystick->axes[5] = state.Gamepad.bRightTrigger / (float)UCHAR_MAX;
+				for (unsigned int axisIndex = 0; axisIndex < 6; ++axisIndex) {
+					joystick->axes[axisIndex].previous = joystick->axes[axisIndex].current;
+				}
+				joystick->axes[0].current = state.Gamepad.sThumbLX   / (float)SHRT_MAX;
+				joystick->axes[1].current = -state.Gamepad.sThumbLY  / (float)SHRT_MAX;
+				joystick->axes[2].current = state.Gamepad.sThumbRX   / (float)SHRT_MAX;
+				joystick->axes[3].current = -state.Gamepad.sThumbRX  / (float)SHRT_MAX;
+				joystick->axes[4].current = state.Gamepad.bLeftTrigger  / (float)UCHAR_MAX;
+				joystick->axes[5].current = state.Gamepad.bRightTrigger / (float)UCHAR_MAX;
 			}
 		}
 	}
@@ -463,15 +486,16 @@ void updateJoysticks(Joystick inout[], unsigned int joystickCount)
 	{
 		Joystick* joystick = &inout[joystickIndex];
 		// Buttons
-		for (int buttonIndex=0; buttonIndex < SDL_JoystickNumButtons(joystick->_sdlJoystick); ++buttonIndex) {
+		for (int buttonIndex=0; buttonIndex < Joystick::maxButtons; ++buttonIndex) {
 			updateButton(&joystick->buttons[buttonIndex], SDL_JoystickGetButton(joystick->_sdlJoystick, buttonIndex));
 		}
 		// Hat
 		joystick->previousHat = joystick->hat;
 		joystick->hat = SDL_JoystickGetHat(joystick->_sdlJoystick, 0);
 		// Axis
-		for (int axisIndex=0; axisIndex < SDL_JoystickNumAxes(joystick->_sdlJoystick); ++axisIndex) {
-			joystick->axes[axisIndex] = SDL_JoystickGetAxis(joystick->_sdlJoystick, axisIndex) / (float)SHRT_MAX;
+		for (int axisIndex=0; axisIndex < Joystick::maxAxes; ++axisIndex) {
+			joystick->axes[axisIndex].previous = joystick->axes[axisIndex].current;
+			joystick->axes[axisIndex].current = SDL_JoystickGetAxis(joystick->_sdlJoystick, axisIndex) / (float)SHRT_MAX;
 		}
 	}
 #endif // JFBJOY_SDL

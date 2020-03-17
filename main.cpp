@@ -8,72 +8,11 @@
 #define forloop(i,end) for(unsigned int i=0; i<(end); i++)
 typedef unsigned int uint;
 
-struct Input
+bool inputPressed(Joystick* joysticks, uint joystickCount, uint* out_inputCode)
 {
-	struct Direction {
-		Button analogUp;
-		Button analogDown;
-		Button analogLeft;
-		Button analogRight;
-		Button analogLTrigger;
-		Button analogRTrigger;
-		Button hatUp;
-		Button hatDown;
-		Button hatLeft;
-		Button hatRight;
-	};
-
-	uint joystickCount;
-	Joystick* joysticks;
-	Direction* joystickDirections;
-};
-
-void createInput(Input* out)
-{
-	out->joysticks = createJoysticks(&out->joystickCount);
-	out->joystickDirections = (Input::Direction*) calloc(out->joystickCount, sizeof(Input::Direction));
-}
-
-void destroyInput(Input* inout)
-{
-	destroyJoysticks(inout->joysticks, inout->joystickCount);
-	free(inout->joystickDirections);
-	*inout = { 0 };
-}
-
-void updateInput(Input* input)
-{
-	updateJoysticks(input->joysticks, input->joystickCount);
-	forloop(joystickIndex, input->joystickCount)
+	forloop(joystickIndex, joystickCount)
 	{
-		Joystick* joystick = &input->joysticks[joystickIndex];
-		Input::Direction* directions = &input->joystickDirections[joystickIndex];
-
-		// Directions
-		float xAxis = joystick->axes[0];
-		float yAxis = joystick->axes[1];
-		float zAxis = joystick->axes[2];
-		updateButton(&directions->analogUp, yAxis < -0.5f);
-		updateButton(&directions->analogDown, yAxis > 0.5f);
-		updateButton(&directions->analogLeft, xAxis < -0.5f);
-		updateButton(&directions->analogRight, xAxis > 0.5f);
-		updateButton(&directions->analogRTrigger, zAxis < -0.5f);
-		updateButton(&directions->analogLTrigger, zAxis > 0.5f);
-
-		uint hat = joystick->hat;
-		updateButton(&directions->hatUp, hat & Hat_up);
-		updateButton(&directions->hatDown, hat & Hat_down);
-		updateButton(&directions->hatLeft, hat & Hat_left);
-		updateButton(&directions->hatRight, hat & Hat_right);
-	}
-}
-
-bool inputPressed(Input input, uint* out_inputCode)
-{
-	forloop(joystickIndex, input.joystickCount)
-	{
-		Joystick& joystick = input.joysticks[joystickIndex];
-		Input::Direction& direction = input.joystickDirections[joystickIndex];
+		Joystick& joystick = joysticks[joystickIndex];
 		uint playerCode = joystickIndex * 0x100;
 
 		forloop(buttonIndex, joystick.maxButtons)
@@ -86,17 +25,17 @@ bool inputPressed(Input input, uint* out_inputCode)
 			}
 		}
 
-		if (direction.analogUp.pressed) {*out_inputCode = playerCode + 2; return true;}
-		if (direction.analogDown.pressed) {*out_inputCode = playerCode + 3; return true;}
-		if (direction.analogLeft.pressed) {*out_inputCode = playerCode + 0; return true;}
-		if (direction.analogRight.pressed) {*out_inputCode = playerCode + 1; return true;}
-		if (direction.analogRTrigger.pressed) { *out_inputCode = playerCode + 4; return true; }
-		if (direction.analogLTrigger.pressed) { *out_inputCode = playerCode + 5; return true; }
+		if (joystick.axes[1].current < -0.5f && joystick.axes[1].previous > -0.5f) {*out_inputCode = playerCode + 2; return true;}
+		if (joystick.axes[1].current > 0.5f  && joystick.axes[1].previous < 0.5f)  {*out_inputCode = playerCode + 3; return true;}
+		if (joystick.axes[0].current < -0.5f && joystick.axes[0].previous > -0.5f) {*out_inputCode = playerCode + 0; return true;}
+		if (joystick.axes[0].current > 0.5f  && joystick.axes[0].previous < 0.5f)  {*out_inputCode = playerCode + 1; return true;}
+		if (joystick.axes[2].current < -0.5f && joystick.axes[2].previous > -0.5f) {*out_inputCode = playerCode + 4; return true;}
+		if (joystick.axes[2].current > 0.5f  && joystick.axes[2].previous < 0.5f)  {*out_inputCode = playerCode + 5; return true;}
 
-		if (direction.hatUp.pressed) { *out_inputCode = playerCode + 0x12; return true; }
-		if (direction.hatDown.pressed) { *out_inputCode = playerCode + 0x13; return true; }
-		if (direction.hatLeft.pressed) { *out_inputCode = playerCode + 0x10; return true; }
-		if (direction.hatRight.pressed) { *out_inputCode = playerCode + 0x11; return true; }
+		if (joystick.hat & Hat_up    && !(joystick.previousHat & Hat_up))    {*out_inputCode = playerCode + 0x12; return true;}
+		if (joystick.hat & Hat_down  && !(joystick.previousHat & Hat_down))  {*out_inputCode = playerCode + 0x13; return true;}
+		if (joystick.hat & Hat_left  && !(joystick.previousHat & Hat_left))  {*out_inputCode = playerCode + 0x10; return true;}
+		if (joystick.hat & Hat_right && !(joystick.previousHat & Hat_right)) {*out_inputCode = playerCode + 0x11; return true;}
 	}
 	return false;
 }
@@ -159,12 +98,13 @@ HWND createWindow()
 	return hwnd;
 }
 
-Input global_input = { 0 };
+uint global_joystickCount = 0;
+Joystick* global_joysticks = 0;
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine, int iCmdShow)
 {
 	HWND window = createWindow();
-	createInput(&global_input);
+	global_joysticks = createJoysticks(&global_joystickCount);
 	bool run = true;
 	while (run) 
 	{
@@ -178,9 +118,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine,
 			}
 		}
 
-		updateInput(&global_input);
+		updateJoysticks(global_joysticks, global_joystickCount);
 		uint inputCode = 0;
-		if (inputPressed(global_input, &inputCode)) {
+		if (inputPressed(global_joysticks, global_joystickCount, &inputCode)) {
 			outputButtonMapping(inputCode);
 		}
 		
@@ -195,8 +135,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine,
 LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
 	if (msg == WM_DEVICECHANGE) {
-		destroyInput(&global_input);
-		createInput(&global_input);
+		destroyJoysticks(global_joysticks, global_joystickCount);
+		global_joysticks = createJoysticks(&global_joystickCount);
 	}
 	if (msg == WM_DESTROY) {
 		PostQuitMessage(0);
